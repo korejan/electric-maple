@@ -44,8 +44,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define EM_DEFAULT_BLACK_TO_ALPHA_THRESHOLD (16.f/255.f)
-
 // Thresholds for reusing last DownMsg when we received too many frames without DownMsgs in a row.
 #define EM_NO_DOWN_MSG_FALLBACK_TIMEOUT_SECS 1
 #define EM_NO_DOWN_MSG_FALLBACK_SKIPPED_FRAME_THRESHOLD 10
@@ -828,7 +826,6 @@ em_stream_client_try_pull_sample(EmStreamClient *sc, struct timespec *out_decode
 	*out_decode_end = decode_end;
 
 	struct em_sc_sample *ret = calloc(1, sizeof(struct em_sc_sample));
-	ret->base.additive_black_threshold = EM_DEFAULT_BLACK_TO_ALPHA_THRESHOLD;
 
 	GstBuffer *buffer = gst_sample_get_buffer(sample);
 	GstCaps *caps = gst_sample_get_caps(sample);
@@ -843,7 +840,6 @@ em_stream_client_try_pull_sample(EmStreamClient *sc, struct timespec *out_decode
 	if (msg.has_frame_data) {
 
 		ret->base.env_blend_mode = msg.frame_data.env_blend_mode;
-		ret->base.additive_black_threshold = msg.frame_data.black_to_alpha_threshold;
 
 		if (msg.frame_data.has_P_localSpace_view0 && msg.frame_data.has_P_localSpace_view1) {
 			ALOGD("Got DownMessage: Frame #%ld V0 (%.2f %.2f %.2f) V1 (%.2f %.2f %.2f) display_time %ld",

@@ -114,8 +114,6 @@ message DownFrameDataMessage {
 	Pose P_localSpace_view1 = 3; // Right view
 	int64 display_time = 4;
 	EnvBlendMode env_blend_mode = 5;
-	 // For emumlated additive mode via alpha blending.
-	float black_to_alpha_threshold = 6;
 	// TODO fovs here
 }
 

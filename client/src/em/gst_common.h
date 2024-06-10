@@ -44,5 +44,4 @@ struct em_sample
 	int64_t frame_sequence_id;
 	int64_t display_time;
 	uint32_t env_blend_mode;
-	float additive_black_threshold;
 };

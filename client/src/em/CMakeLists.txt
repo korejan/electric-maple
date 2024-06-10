@@ -8,6 +8,7 @@ add_library(
 	em_frame_data.cpp
 	em_remote_experience.cpp
 	em_stream_client.c
+	em_system_properties.cpp
 	em_passthrough.cpp
 	render/GLDebug.cpp
 	render/GLError.cpp
@@ -16,7 +17,7 @@ add_library(
 	)
 target_link_libraries(
 	electricmaple_client
-	PRIVATE em_proto aux_util ${ANDROID_LOG_LIBRARY}
+	PRIVATE em_proto aux_math aux_util ${ANDROID_LOG_LIBRARY}
 	PUBLIC
 		OpenXR::openxr_loader # actually only need headers but prefab doesn't expose that
 		EGL::EGL

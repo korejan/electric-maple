@@ -16,6 +16,8 @@
 #include "em_connection.h"
 #include "em_stream_client.h"
 #include "em_passthrough.hpp"
+#include "em_system_properties.hpp"
+#include "em_colorspaces.hpp"
 #include "gst_common.h"
 #include "render/GLSwapchain.h"
 #include "render/render.hpp"
@@ -41,6 +43,8 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
+#define EM_KEY_COLOR_PROPERTY_NAME "debug.electric_maple.key_color"
+#define EM_KEY_THRESHOLD_PROPERTY_NAME "debug.electric_maple.key_threshold"
 
 struct _EmRemoteExperience
 {
@@ -53,6 +57,14 @@ struct _EmRemoteExperience
 
 	using PassthroughPtr = std::unique_ptr<em::Passthrough>;
 	PassthroughPtr passthrough{};
+	struct {
+		struct xrt_vec3 key_color = em::linear_srgb_to_yuv_b2020(xrt_vec3 {
+			.x = 0.f,
+			.y = 1.f,
+			.z = 0.f
+		});
+		float key_threshold = em::DefaultKeyThreshold;
+	} additive_key_to_alpha {};
 
 	PFN_xrConvertTimespecTimeToTimeKHR convertTimespecTimeToTime;
 
@@ -227,6 +239,13 @@ em_remote_experience_new(EmConnection *connection,
 			em_remote_experience_destroy(&self);
 			return nullptr;
 		}
+	}
+
+	if (const auto key_color_opt = em::read_system_property_vec3f(EM_KEY_COLOR_PROPERTY_NAME, 500)) {
+		self->additive_key_to_alpha.key_color = em::linear_srgb_to_yuv_b2020(key_color_opt.value());
+	}
+	if (const auto key_threshold_opt = em::read_system_property_float(EM_KEY_THRESHOLD_PROPERTY_NAME, 500)) {
+		self->additive_key_to_alpha.key_threshold = key_threshold_opt.value();
 	}
 
 	self->passthrough = em::make_passthrough(em::XrContext{
@@ -525,11 +544,9 @@ em_remote_experience_inner_poll_and_render_frame(EmRemoteExperience *exp,
 		return EM_POLL_RENDER_RESULT_NO_SAMPLE_AVAILABLE;
 	}
 	
-	float additive_black_to_alpha_threshold = DefaultBlackThreshold;
 	if (sample->env_blend_mode != 0) {
 		const auto envBlendMode = static_cast<XrEnvironmentBlendMode>(sample->env_blend_mode);
 		exp->passthrough->set_blend_mode(envBlendMode);
-		additive_black_to_alpha_threshold = sample->additive_black_threshold;
 	}
 
 	projectionViews[0].pose = sample->poses[0];
@@ -566,12 +583,18 @@ em_remote_experience_inner_poll_and_render_frame(EmRemoteExperience *exp,
 	const auto clearColor = exp->passthrough->clear_color();
 	glClearColor(clearColor.x, clearColor.y, clearColor.z, clearColor.w);
 
+	const auto& additive_key_to_alpha = exp->additive_key_to_alpha;
 	const Renderer::DrawInfo drawInfo = {
 		.texture = sample->frame_texture_id,
 		.texture_target = sample->frame_texture_target,
 		.alpha_for_additive = {
 			.enable = exp->passthrough->use_alpha_blend_for_additive(),
-			.black_threshold = additive_black_to_alpha_threshold,
+			.key_color = {
+				additive_key_to_alpha.key_color.x,
+				additive_key_to_alpha.key_color.y,
+				additive_key_to_alpha.key_color.z
+			},
+			.key_threshold = additive_key_to_alpha.key_threshold,
 		},
 	};
 	exp->renderer->draw(drawInfo);

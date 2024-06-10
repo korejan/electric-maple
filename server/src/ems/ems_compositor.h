@@ -131,10 +131,6 @@ struct ems_compositor
 	int image_sequence;
 	struct u_sink_debug debug_sink;
 
-	struct {
-		u_var_draggable_f32 black_threshold;
-	} alpha_for_additive_mode = {};
-
 	struct
 	{
 		VkDeviceMemory device_memory;

@@ -62,28 +62,41 @@ static constexpr const GLchar *fragmentShaderSource = R"(
  * with alpha blending in the vendor extensions (e.g. XR_FB_passthrough) case.
  */
 static constexpr const GLchar *AdditiveSimFragShader = R"(
-    /*!
-     * Note:
-     * Depending on the current encoder configuration, you may need to use different thresholds.
-     *
-     * The stream is encoded with (a 8-bit channel) limited color range by default meaning
-     * When a YUV pixel is converted to RGB using the BT.709/601 transfer function (limited-range),
-     * RGB values are in a 16-255 (chroma 16-235) range.
-     * Pure black value in this case will be ~= vec3(16/255).
-     * 
-     * If encoding config changes to use 10-bit channel encoding BT.709/2020 with limited range, the
-     * RGB values will be in a 64-940 range.
-     * Pure black value will be ~= vec3(64/1023)
-     *
-     * If full colour-range mode is used then pure black will be == vec3(0.0)
-     *
-     */
-    uniform float blackThreshold;
-    
+
+	const mat4 LINEAR_SRGB_TO_YUV_BT709_MAT = mat4(
+		0.2126, -0.09991,  0.615,   0.0,
+		0.7152, -0.33609, -0.55861, 0.0,
+		0.0722,  0.436,   -0.05639, 0.0,
+		0.0,     0.5,      0.5,     1.0
+	);
+	const mat4 LINEAR_SRGB_TO_YUV_BT2020_MAT = mat4(
+		0.2627, -0.13963,  0.5,    0.0,
+		0.6780, -0.36037, -0.3607, 0.0,
+		0.0593,  0.5,     -0.1393, 0.0,
+		0.0,     0.5,      0.5,    1.0
+	);
+	const mat4 NON_LINEAR_SRGB_TO_YUV_BT709_MAT = mat4(
+		0.2126, -0.1146,  0.5000, 0.0,
+		0.7152, -0.3854, -0.4542, 0.0,
+		0.0722,  0.5000, -0.0458, 0.0,
+		0.0,     0.5,     0.5,    1.0
+	);
+	const mat4 NON_LINEAR_SRGB_TO_YUV_BT2020_MAT = mat4(
+		0.2627, -0.1396,  0.5000, 0.0,
+		0.6780, -0.3604, -0.0416, 0.0,
+		0.0593,  0.5000, -0.4584, 0.0,
+		0.0,     0.5,     0.5,    1.0
+	);
+
+	uniform vec3 keyColor; // format & colorspace: YUV_BT2020
+	uniform float keyThreshold;
+
     void main() {
-        vec3 color = texture(textureSampler, frag_uv).rgb;
-        float alpha = all(greaterThan(vec3(blackThreshold), color)) ? 0.0 : 1.0;
-        frag_color = vec4(color, alpha);
+        vec3 color  = texture(textureSampler, frag_uv).rgb;
+		vec4 yuv    = LINEAR_SRGB_TO_YUV_BT2020_MAT * vec4(color, 1.0);
+        float dist  = distance(keyColor.yz, yuv.yz);
+		float alpha = (dist < keyThreshold) ? 0.0 : 1.0;
+        frag_color  = vec4(color, alpha);
     }
 )";
 
@@ -169,7 +182,8 @@ Renderer::setupShaders()
 		Program {
 			.id = additiveSimProgram,
 			.textureSamplerLocation = glGetUniformLocation(additiveSimProgram, samplerName),
-			.blackThresholdLocation = glGetUniformLocation(additiveSimProgram, "blackThreshold"),
+			.keyColorLocation       = glGetUniformLocation(additiveSimProgram, "keyColor"),
+			.keyThresholdLocation   = glGetUniformLocation(additiveSimProgram, "keyThreshold"),
 		}
 	};
 }
@@ -268,7 +282,8 @@ Renderer::draw(const Renderer::DrawInfo& drawInfo) const
 	glUniform1i(program.textureSamplerLocation, 0);
 	
 	if (drawInfo.alpha_for_additive.enable) {
-		glUniform1f(program.blackThresholdLocation, drawInfo.alpha_for_additive.black_threshold);
+		glUniform3fv(program.keyColorLocation, 1, drawInfo.alpha_for_additive.key_color);
+		glUniform1f(program.keyThresholdLocation, drawInfo.alpha_for_additive.key_threshold);
 	}
 
 	// Draw the quad

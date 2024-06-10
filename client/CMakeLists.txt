@@ -113,6 +113,22 @@ add_library(
 	)
 target_link_libraries(aux_util PUBLIC aux-includes)
 
+set(AUX_MATH_DIR ../monado/src/xrt/auxiliary/math)
+add_library(
+	aux_math STATIC
+	${AUX_MATH_DIR}/m_api.h
+	${AUX_MATH_DIR}/m_base.cpp
+	${AUX_MATH_DIR}/m_vec2.h
+	${AUX_MATH_DIR}/m_vec3.h
+	)
+target_link_libraries(
+	aux_math
+	PUBLIC aux-includes aux_util
+	)
+target_include_directories(aux_math SYSTEM PRIVATE ${EIGEN3_INCLUDE_DIR})
+# following required for eigen-libs
+set_property(TARGET aux_math PROPERTY POSITION_INDEPENDENT_CODE ON)
+
 if(ANDROID)
 	find_library(ANDROID_LOG_LIBRARY log)
 	find_library(ANDROID_LIBRARY android)

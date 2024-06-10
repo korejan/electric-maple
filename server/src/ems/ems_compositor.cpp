@@ -66,7 +66,6 @@
 
 
 DEBUG_GET_ONCE_LOG_OPTION(log, "XRT_COMPOSITOR_LOG", U_LOGGING_INFO)
-DEBUG_GET_ONCE_FLOAT_OPTION(additive_black_threshold, "XRT_ADDITIVE_BLACK_THRESHOLD", (16.f/255.f))
 
 
 /*
@@ -541,7 +540,6 @@ pack_blit_and_encode(struct ems_compositor *c,
 	msg.frame_data.has_P_localSpace_view1 = true;
 	msg.frame_data.P_localSpace_view1 = to_proto(rvd->pose);
 	msg.frame_data.env_blend_mode = (em_proto_EnvBlendMode)env_blend_mode;
-	msg.frame_data.black_to_alpha_threshold = c->alpha_for_additive_mode.black_threshold.val;
 
 	wrap = NULL; // important to keep this line after setting "msg.frame_sequence_id" above.
 
@@ -862,13 +860,6 @@ ems_compositor_create_system(ems_instance &emsi, struct xrt_system_compositor **
 	c->frame.rendering.id = -1;
 	c->state = EMS_COMP_COMP_STATE_READY;
 
-
-	struct u_var_draggable_f32 *black_threshold = &c->alpha_for_additive_mode.black_threshold;
-	black_threshold->val = debug_get_float_option_additive_black_threshold();
-	black_threshold->min = 0.f;
-	black_threshold->step = 0.001f;
-	black_threshold->max = 1.f;
-
 	xrt_device *xdev = emsi.xsysd_base.roles.head;
 
 	c->settings.frame_interval_ns = xdev->hmd->screens[0].nominal_frame_interval_ns;
@@ -903,7 +894,6 @@ ems_compositor_create_system(ems_instance &emsi, struct xrt_system_compositor **
 	    VK_FORMAT_R8G8B8A8_UNORM);       // vk_format
 
 	u_var_add_root(c, "Electric Maple Server compositor", 0);
-	u_var_add_draggable_f32(c, &c->alpha_for_additive_mode.black_threshold, "Additive Black Threshold");
 	u_var_add_sink_debug(c, &c->debug_sink, "Debug Sink");
 	
 #define EMS_APPSRC_NAME "EMS_source"

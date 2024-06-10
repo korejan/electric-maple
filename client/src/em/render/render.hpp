@@ -17,11 +17,9 @@
 #include <memory>
 #include <array>
 
-/*!
-  * Refer to the notes in AdditiveSimFragShader to understand the reasoning
-  * for the default value.
-  */
-inline constexpr const float DefaultBlackThreshold = 16.f/255.f;
+namespace em {
+inline constexpr const float DefaultKeyThreshold = 0.46f; // default for green keys.
+}
 
 class Renderer
 {
@@ -49,7 +47,8 @@ public:
 		GLuint texture;
 		GLenum texture_target;
 		struct {
-			float black_threshold{DefaultBlackThreshold};
+			float key_color[3]; // format-space: yuv-bt2020
+			float key_threshold{em::DefaultKeyThreshold};
 			bool  enable{false};
 		} alpha_for_additive;
 	};
@@ -66,11 +65,10 @@ private:
 	struct Program final {
 		GLuint id = 0;
 		GLint textureSamplerLocation = 0;
-		GLint blackThresholdLocation = 0;
+		GLint keyColorLocation = 0;
+		GLint keyThresholdLocation = 0;
 	};
 	std::array<Program,2> programs = {};
 	GLuint quadVAO = 0;
 	GLuint quadVBO = 0;
-
-	float blackThreshold = DefaultBlackThreshold;
 };
