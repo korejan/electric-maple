@@ -8,8 +8,10 @@
  */
 
 #pragma once
-
+#define GST_USE_UNSTABLE_API
+#include "gst/cuda/ems_vk_cuda_image_pool.h"
 #include "xrt/xrt_frame.h"
+#include <gst/cuda/gstcuda.h>
 
 typedef struct _GstElement GstElement;
 
@@ -62,6 +64,14 @@ struct ems_gstreamer_src
 
 	//! Pipeline this sink is producing frames into.
 	struct gstreamer_pipeline *gp;
+
+	//! hw-buffer pool
+	struct ems_vk_cuda_image_pool *vk_cuda_image_pool;
+
+	//! vulkan device UUID for hw-accel interop, e.g. CudaContext.
+	xrt_uuid_t vk_device_uuid;
+
+	GstCudaContext* gst_cuda_context;
 
 	//! Offset applied to timestamps given to GStreamer.
 	uint64_t offset_ns;

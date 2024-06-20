@@ -141,6 +141,7 @@ struct ems_compositor
 	struct gstreamer_pipeline *gstreamer_pipeline;
 	struct ems_gstreamer_src *gstreamer_src;
 	struct xrt_frame_sink *frame_sink;
+	struct ems_vk_cuda_image_pool *vk_cuda_image_pool;
 
 	uint64_t offset_ns;
 };

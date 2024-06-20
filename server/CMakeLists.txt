@@ -50,6 +50,7 @@ pkg_check_modules(GST REQUIRED gstreamer-plugins-base-1.0)
 pkg_check_modules(GST REQUIRED gstreamer-plugins-bad-1.0)
 pkg_check_modules(GST_VIDEO REQUIRED gstreamer-video-1.0)
 pkg_check_modules(GST_APP REQUIRED gstreamer-app-1.0)
+pkg_check_modules(GST_CUDA REQUIRED gstreamer-cuda-1.0)
 
 if(EMS_LIBSOUP2)
 	pkg_check_modules(LIBSOUP REQUIRED libsoup-2.4)

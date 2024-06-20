@@ -22,6 +22,7 @@
 #include "electricmaple.pb.h"
 
 #include "gst/ems_gstreamer.h"
+#include "gst/ems_gstreamer_src.h"
 #include "os/os_time.h"
 
 #include "util/u_misc.h"
@@ -43,6 +44,9 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+
+#include "gst/cuda/ems_vk_cuda_image_pool.h"
+#include "gst/cuda/ems_vk_cuda_image.h"
 
 // native quest resolution
 // #define APP_VIEW_W (1832)
@@ -375,9 +379,12 @@ pack_blit_and_encode(struct ems_compositor *c,
 	}
 	VkResult ret;
 
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	struct vk_image_readback_to_xf *wrap = NULL;
+#endif
 	struct vk_bundle *vk = &c->base.vk;
 
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	// Getting frame
 	if (!vk_image_readback_to_xf_pool_get_unused_frame(vk, c->pool, &wrap)) {
 		EMS_COMP_ERROR(c, "vk_image_readback_to_xf_pool_get_unused_frame: Failed!");
@@ -386,6 +393,13 @@ pack_blit_and_encode(struct ems_compositor *c,
 
 	// Usefull.
 	xrt_frame *frame = &wrap->base_frame;
+#else
+	struct vk_cuda_image* new_vk_cuda_image = ems_vk_cuda_image_pool_new_image(c->vk_cuda_image_pool);
+	if (new_vk_cuda_image == nullptr) {
+		EMS_COMP_ERROR(c, "failed to fetch vk_cuda_image!!!");
+		return;
+	}
+#endif
 
 	const VkCommandBufferUsageFlags flags = 0;
 	VkCommandBuffer cmd = {};
@@ -396,7 +410,9 @@ pack_blit_and_encode(struct ems_compositor *c,
 	ret = vk_cmd_pool_create_and_begin_cmd_buffer_locked(vk, &c->cmd_pool, flags, &cmd);
 	if (ret != VK_SUCCESS) {
 		EMS_COMP_ERROR(c, "vk_cmd_pool_create_and_begin_cmd_buffer_locked: %s", vk_result_string(ret));
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 		xrt_frame_reference(&frame, NULL);
+#endif
 		return;
 	}
 
@@ -426,11 +442,15 @@ pack_blit_and_encode(struct ems_compositor *c,
 		info.dst.size = (xrt_size){READBACK_W, READBACK_H};
 		info.dst.fm_image.aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
 		info.dst.fm_image.base_array_layer = 0;
+		info.dst.fm_image.image = new_vk_cuda_image->base.handle;
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 		info.dst.fm_image.image = c->bounce.image;
+#endif
 
 		vk_cmd_blit_images_side_by_side_locked(vk, cmd, &info);
 	}
 
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	// Copy bounce to destination.
 	{
 		struct vk_cmd_copy_image_info info = {};
@@ -453,6 +473,7 @@ pack_blit_and_encode(struct ems_compositor *c,
 
 		vk_cmd_copy_image_locked(vk, cmd, &info);
 	}
+#endif
 
 	// Barrier images back, or make ready for read.
 	{
@@ -487,6 +508,7 @@ pack_blit_and_encode(struct ems_compositor *c,
 			    view_subresource_range);              // subresourceRange
 		}
 
+
 		VkImageSubresourceRange first_color_level_subresource_range = {
 		    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
 		    .baseMipLevel = 0,
@@ -495,6 +517,7 @@ pack_blit_and_encode(struct ems_compositor *c,
 		    .layerCount = 1,
 		};
 
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 		// Barrier transfer image to host so we can safely read back.
 		vk_cmd_image_barrier_locked(              //
 		    vk,                                   // vk_bundle
@@ -507,6 +530,20 @@ pack_blit_and_encode(struct ems_compositor *c,
 		    VK_PIPELINE_STAGE_TRANSFER_BIT,       // srcStageMask
 		    VK_PIPELINE_STAGE_HOST_BIT,           // dstStageMask
 		    first_color_level_subresource_range); // subresourceRange
+#else
+		// Barrier transfer image to vk_cuda_image
+		vk_cmd_image_barrier_locked(              //
+		    vk,                                   // vk_bundle
+		    cmd,                                  // cmdbuffer
+		    new_vk_cuda_image->base.handle,                          // image
+		    VK_ACCESS_TRANSFER_WRITE_BIT,         // srcAccessMask
+		    VK_ACCESS_MEMORY_READ_BIT,              // dstAccessMask
+		    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, // oldImageLayout
+		    VK_IMAGE_LAYOUT_GENERAL,              // newImageLayout
+		    VK_PIPELINE_STAGE_TRANSFER_BIT,       // srcStageMask
+		    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,           // dstStageMask
+		    first_color_level_subresource_range); // subresourceRange
+#endif
 	}
 
 	// Done submitting commands.
@@ -520,44 +557,65 @@ pack_blit_and_encode(struct ems_compositor *c,
 	// Do checking here.
 	if (ret != VK_SUCCESS) {
 		EMS_COMP_ERROR(c, "vk_cmd_pool_end_submit_wait_and_free_cmd_buffer_locked: %s", vk_result_string(ret));
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 		xrt_frame_reference(&frame, NULL);
+#else
+		ems_vk_cuda_image_pool_release_image(c->vk_cuda_image_pool, new_vk_cuda_image);
+#endif
 		return;
 	}
 
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	// HACK
 	wrap->base_frame.timestamp = os_monotonic_get_ns();
 	wrap->base_frame.source_timestamp = wrap->base_frame.timestamp;
 	wrap->base_frame.source_sequence = c->image_sequence++;
 	wrap->base_frame.source_id = 0;
+#else
+	const uint64_t xtimestamp_ns = os_monotonic_get_ns();
+#endif
 
 	// set the latest Downstream mesg before pushing the frame
 	em_proto_DownMessage msg = em_proto_DownMessage_init_default;
 	msg.has_frame_data = true;
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	msg.frame_data.frame_sequence_id = wrap->base_frame.source_sequence;
 	msg.frame_data.display_time = wrap->base_frame.timestamp;
+#else
+	msg.frame_data.frame_sequence_id = c->image_sequence++;
+	msg.frame_data.display_time = xtimestamp_ns;
+#endif
 	msg.frame_data.has_P_localSpace_view0 = true;
 	msg.frame_data.P_localSpace_view0 = to_proto(lvd->pose);
 	msg.frame_data.has_P_localSpace_view1 = true;
 	msg.frame_data.P_localSpace_view1 = to_proto(rvd->pose);
 	msg.frame_data.env_blend_mode = (em_proto_EnvBlendMode)env_blend_mode;
 
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	wrap = NULL; // important to keep this line after setting "msg.frame_sequence_id" above.
-
+#endif
 
 	if (!c->pipeline_playing) {
 		ems_gstreamer_pipeline_play(c->gstreamer_pipeline);
 		c->pipeline_playing = true;
 	}
 
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	u_sink_debug_push_frame(&c->debug_sink, frame);
+#endif
 
 	GBytes *downMsg_bytes =  ems_gstreamer_pipeline_encode_down_msg(&msg);
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	ems_gstreamer_src_push_frame(c->gstreamer_src, frame, downMsg_bytes);
-
 	// TODO send data channel message with pose and fov here?
+#else
+	ems_gstreamer_src_push_vk_cuda_image(c->gstreamer_src, new_vk_cuda_image, downMsg_bytes, xtimestamp_ns);
+#endif
 
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	// Dereference this frame - by now we should have pushed it.
 	xrt_frame_reference(&frame, NULL);
+#endif
 }
 
 
@@ -882,6 +940,7 @@ ems_compositor_create_system(ems_instance &emsi, struct xrt_system_compositor **
 		return XRT_ERROR_VULKAN;
 	}
 
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	VkExtent2D readback_extent = {};
 	readback_extent.height = READBACK_H;
 	readback_extent.width = READBACK_W;
@@ -892,23 +951,42 @@ ems_compositor_create_system(ems_instance &emsi, struct xrt_system_compositor **
 	    &c->pool,                        // out_pool
 	    XRT_FORMAT_R8G8B8X8,             // xrt_format
 	    VK_FORMAT_R8G8B8A8_UNORM);       // vk_format
+#endif
 
 	u_var_add_root(c, "Electric Maple Server compositor", 0);
 	u_var_add_sink_debug(c, &c->debug_sink, "Debug Sink");
 	
 #define EMS_APPSRC_NAME "EMS_source"
 
+	struct ems_vk_cuda_image_pool_info pool_info = {
+		.extent    = {READBACK_W, READBACK_H},
+		.vk_format = VK_FORMAT_R8G8B8A8_SRGB,
+		.pool_size = 8,
+	};
+	c->vk_cuda_image_pool = ems_vk_cuda_image_pool_create(&c->base.vk, &pool_info);
+	if (c->vk_cuda_image_pool == nullptr) {
+		EMS_COMP_DEBUG(c, "failed to create vk-cuda-image pool");
+		return XRT_ERROR_VULKAN;
+	}
+
 	ems_gstreamer_pipeline_create(&c->xfctx, EMS_APPSRC_NAME, emsi.callbacks, &c->gstreamer_pipeline);
 	ems_gstreamer_src_create_with_pipeline( //
 	    c->gstreamer_pipeline,           //
 	    READBACK_W,                      //
 	    READBACK_H,                      //
-	    XRT_FORMAT_R8G8B8X8,             //
-	    EMS_APPSRC_NAME,                 //
-	    &c->gstreamer_src,              //
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
+		XRT_FORMAT_R8G8B8X8,             //
+#else
+	    XRT_FORMAT_R8G8B8A8,             //
+#endif
+	    EMS_APPSRC_NAME,            //
+		&c->sys_info.compositor_vk_deviceUUID, //
+		c->vk_cuda_image_pool,       //
+	    &c->gstreamer_src,               //
 	    &c->frame_sink);                 //
 
 
+#ifdef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
 	// Bounce image for scaling.
 	{
 		VkFormat format = VK_FORMAT_R8G8B8A8_SRGB;
@@ -927,6 +1005,7 @@ ems_compositor_create_system(ems_instance &emsi, struct xrt_system_compositor **
 			EMS_COMP_DEBUG(c, "vk_create_image_simple: %s", vk_result_string(ret));
 		}
 	}
+#endif
 
 	EMS_COMP_DEBUG(c, "Done %p", (void *)c);
 

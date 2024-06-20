@@ -16,6 +16,11 @@
 
 #include "ems_gstreamer_src.h"
 #include "ems_gstreamer.h"
+
+#include "cuda/ems_vk_cuda_image_pool.h"
+#include "cuda/ems_vk_cuda_gst_buffer.h"
+#include "cuda/ems_vk_cuda_image.h"
+
 #include "gst/video/video-format.h"
 #include "gst/video/gstvideometa.h"
 #include "gst/app/gstappsink.h"
@@ -64,6 +69,93 @@ complain_if_wrong_image_size(struct xrt_frame *xf)
 	}
 	if (xf->height % 2 == 1) {
 		U_LOG_W("Image height needs to be divisible by 2!");
+	}
+}
+
+struct vk_cuda_image_destroy_ctx {
+	struct ems_vk_cuda_image_pool *vkcip;
+	struct vk_cuda_image *vkci;
+};
+
+static void
+destroy_vk_cuda_image(void *user_data) {
+	struct vk_cuda_image_destroy_ctx *gs = (struct vk_cuda_image_destroy_ctx*)user_data;
+	ems_vk_cuda_image_pool_release_image(gs->vkcip, gs->vkci);
+	g_free(gs);
+}
+
+void
+ems_gstreamer_src_push_vk_cuda_image(struct ems_gstreamer_src *gs,
+                                     struct vk_cuda_image *vkci,
+									 GBytes *downMsg_bytes,
+                                     uint64_t xtimestamp_ns) {
+	SINK_TRACE_MARKER();
+
+	assert(vkci != NULL);
+	struct vk_cuda_image_destroy_ctx *destroy_cb = g_new0(struct vk_cuda_image_destroy_ctx, 1);
+	destroy_cb->vkci = vkci;
+	destroy_cb->vkcip = gs->vk_cuda_image_pool;
+
+
+	struct ems_vk_cuda_image_pool_info pool_info;
+	ems_vk_cuda_image_pool_get_info(gs->vk_cuda_image_pool, &pool_info);
+
+	struct ems_gst_buffer_new_wrapped_cuda_info info = {
+        .allocator = NULL,
+        .context   = gs->gst_cuda_context,
+        .stream    = NULL,
+        .width     = pool_info.extent.width,
+        .height    = pool_info.extent.height,
+        .format    = GST_VIDEO_FORMAT_RGBA, // TODO:!!! use and convert pool_info.format!
+        .user_data = destroy_cb,
+        .destroy_notify = destroy_vk_cuda_image,
+    };
+	GstBuffer *buffer = ems_gst_buffer_new_wrapped_cuda(&info, vkci);
+	if (buffer == NULL) {
+		U_LOG_E("Failed to allocate GstBuffer with payload.");
+		return;
+	}
+
+	// Use the first frame as offset.
+	if (gs->offset_ns == 0) {
+		gs->offset_ns = xtimestamp_ns;
+	}
+
+	// Need to be offset or gstreamer becomes sad.
+	GST_BUFFER_PTS(buffer) = xtimestamp_ns - gs->offset_ns;
+
+	// Duration is measured from last time stamp.
+	GST_BUFFER_DURATION(buffer) = xtimestamp_ns - gs->timestamp_ns;
+	gs->timestamp_ns = xtimestamp_ns;
+
+
+	size_t payload_size;
+	gconstpointer payload_ptr = g_bytes_get_data(downMsg_bytes, &payload_size);
+
+	// Repack the protobuf into a GstBuffer
+	GstBuffer *struct_buf = gst_buffer_new_memdup(payload_ptr, payload_size);
+	if (!struct_buf) {
+			U_LOG_E("Failed to allocate GstBuffer with payload.");
+			return;
+	}
+
+	// Add it to a custom meta
+	GstCustomMeta *custom_meta = gst_buffer_add_custom_meta(buffer, "down-message");
+	if (custom_meta == NULL) {
+			U_LOG_E("Failed to add GstCustomMeta");
+			gst_buffer_unref(struct_buf);
+			return;
+	}
+	GstStructure *custom_structure = gst_custom_meta_get_structure(custom_meta);
+	gst_structure_set(custom_structure, "protobuf", GST_TYPE_BUFFER, struct_buf, NULL);
+
+	gst_buffer_unref(struct_buf);
+
+
+	// All done, send it to the gstreamer pipeline.
+	GstFlowReturn ret = gst_app_src_push_buffer((GstAppSrc *)gs->appsrc, buffer);
+	if (ret != GST_FLOW_OK) {
+		U_LOG_E("Got GST error '%i'", ret);
 	}
 }
 
@@ -200,6 +292,8 @@ ems_gstreamer_src_create_with_pipeline(struct gstreamer_pipeline *gp,
                                        uint32_t height,
                                        enum xrt_format format,
                                        const char *appsrc_name,
+                                       const struct xrt_uuid *vk_device_uuid,
+									   struct ems_vk_cuda_image_pool *image_pool,
                                        struct ems_gstreamer_src **out_gs,
                                        struct xrt_frame_sink **out_xfs)
 {
@@ -221,9 +315,12 @@ ems_gstreamer_src_create_with_pipeline(struct gstreamer_pipeline *gp,
 
 	struct ems_gstreamer_src *gs = U_TYPED_CALLOC(struct ems_gstreamer_src);
 	//gs->base.push_frame = push_frame;
+	gs->gst_cuda_context = ems_gst_load_cuda_context(vk_device_uuid);
 	gs->node.break_apart = break_apart;
 	gs->node.destroy = destroy;
 	gs->gp = gp;
+	gs->vk_device_uuid = *vk_device_uuid;
+	gs->vk_cuda_image_pool = image_pool;
 	gs->appsrc = gst_bin_get_by_name(GST_BIN(gp->pipeline), appsrc_name);
 
 	U_LOG_D("Creating pipeline with dimensions %dx%d", width, height);
@@ -235,6 +332,14 @@ ems_gstreamer_src_create_with_pipeline(struct gstreamer_pipeline *gp,
 	    "height", G_TYPE_INT, height,         //
 	    "framerate", GST_TYPE_FRACTION, 72, 1, //
 	    NULL);
+
+#ifndef EMS_USE_OLD_IMPL_TODO_REFACTOR_PLZ
+	GstElement* capsfilter = gst_element_factory_make("capsfilter", "capsfilter");
+	GstCapsFeatures* features = gst_caps_features_new("memory:CUDAMemory", NULL);
+  	gst_caps_set_features(caps, 0, features);
+  	g_object_set(capsfilter, "caps", caps, NULL);
+  	gst_caps_unref(caps);
+#endif
 
 	g_object_set(G_OBJECT(gs->appsrc),                      //
 	             "caps", caps,                              //
